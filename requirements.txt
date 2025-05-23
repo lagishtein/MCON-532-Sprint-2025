@@ -1,17 +1,24 @@
-requests
-openai
-python-dotenv
+requests~=2.32.3
+openai~=1.80.0
+python-dotenv~=1.0.1
 # For web development
-django
+django~=5.1.6
 djangorestframework
-# Postgresql database adapter
-psycopg2-binary
+
 # For data manipulation and analysis
-numpy
-pandas
-scikit-learn
+numpy~=2.2.4
+pandas~=2.2.3
+scikit-learn~=1.6.1
 # Google authentication and API client libraries
 google-auth
-google-auth-oauthlib
+google-auth-oauthlib~=1.2.2
 google-auth-httplib2
-google-api-python-client
+google-api-python-client~=2.169.0
+# Postgresql database adapter
+psycopg2-binary
+# for embeddings
+
+dotenv~=0.9.9
+pydub~=0.25.1
+pytz~=2025.2
+protobuf~=6.30.2

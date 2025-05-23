@@ -1,3 +1,4 @@
+from django.contrib.postgres.fields import ArrayField
 from django.db import models
 from django.contrib.auth.models import User
 from django.db.models import JSONField, TextField  # Import for JSONField
@@ -12,6 +13,7 @@ class ChatMessage(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
 
+
 class CalendarEvent(models.Model):
     class Meta:
         db_table = 'calendar_events'
@@ -21,6 +23,8 @@ class CalendarEvent(models.Model):
     event_start = models.DateTimeField()  # Timestamp for the event's start time
     created_at = models.DateTimeField(auto_now_add=True)
     summary = models.TextField(default="")
+    embedding = ArrayField(models.FloatField(), blank=True, null=True)  # <--- Add this
 
-    def __str__(self):
+
+def __str__(self):
         return f"Event for {self.user.username} at {self.event_start}"

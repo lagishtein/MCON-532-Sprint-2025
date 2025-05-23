@@ -138,6 +138,7 @@
         <input id="chat-input" type="text" placeholder="Type your message here..." required />
         <button type="submit">Send</button>
     </form>
+    <audio id="tts-audio" controls style="display: none;"></audio>
 </main>
 
 <script>
@@ -164,6 +165,14 @@
             .then(response => response.json())
             .then(data => {
                 appendMessage('ai', data.response || 'No response.');
+                if (data.audio_url) {
+                    const audio = document.getElementById("tts-audio");
+                    audio.src = data.audio_url;
+                    audio.hidden = false;
+                    audio.play().catch(error => {
+                        console.error('Audio playback error:', error);
+                    });
+                }
             })
             .catch(error => {
                 console.error('Fetch error:', error);
