@@ -13,10 +13,30 @@ from googleapiclient.discovery import build
 from openai import OpenAI
 import json
 from chat.models import ChatMessage, CalendarEvent
-
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+import uuid
+from django.core.files.storage import default_storage
+from django.core.files.base import ContentFile
 # Initialize OpenAI client
 # This client is used to interact with the OpenAI API for generating chat responses.
 client = OpenAI(api_key=settings.OPEN_AI_API_KEY, organization=settings.OPENAI_ORG_ID)
+
+
+def compute_cosine_similarities(query_vector, matrix):
+    if not matrix:
+        return []
+    query_vec = np.array(query_vector).reshape(1, -1)
+    matrix_np = np.array(matrix)
+    similarities = cosine_similarity(query_vec, matrix_np)[0]
+    return similarities
+
+def embed_text(text):
+    result = client.embeddings.create(
+        input=[text],
+        model="text-embedding-ada-002"
+    )
+    return result.data[0].embedding
 
 def get_combined_event_data_for_assistant(user):
     # Optional: limit to future 2 weeks
@@ -27,6 +47,36 @@ def get_combined_event_data_for_assistant(user):
     # Extract just the raw JSON content
     combined_events_data = [event.event_data for event in events]
     return json.dumps(combined_events_data, indent=2)
+
+def get_relevant_events(user, query_embedding):
+    # Step 2: Retrieve past events with embeddings
+    # This function retrieves past events for the user and computes their cosine similarity with the query embedding.
+    relevant_context = "No events found."
+    events = CalendarEvent.objects.filter(user=user, embedding__isnull=False)
+    if events:
+        embeddings = [event.embedding for event in events]
+        similarities = compute_cosine_similarities(query_embedding, embeddings)
+        top_indices = np.argsort(similarities)[-3:][::-1]
+        events_list = list(events)
+        top_events = [events_list[i] for i in top_indices]
+        relevant_context = "\n".join([json.dumps(event.event_data) for event in top_events])
+        return relevant_context
+    return relevant_context
+
+def synthesize_speech(text, filename_base="ai_response"):
+    """
+    Generate speech from text using OpenAI TTS and save as an MP3 file.
+    Returns the relative URL to the audio file.
+    """
+    speech_response = client.audio.speech.create(
+        model="tts-1",
+        voice="nova",  # Options: alloy, echo, fable, onyx, nova, shimmer
+        input=text
+    )
+    audio_data = speech_response.read()
+    filename = f"{filename_base}_{uuid.uuid4().hex[:8]}.mp3"
+    default_storage.save(filename, ContentFile(audio_data))
+    return "/media/" + filename  # Return relative URL for frontend playback
 
 def index(request):
     """
@@ -50,18 +100,28 @@ def response(request):
         message = request.POST.get("message", "")
         if not message:
             return JsonResponse({'response': 'No message provided.'}, status=400)
+
+        query_embedding = embed_text(message)
+        user = request.user
+        # Retrieve past events with embeddings
+        relevant_context = get_relevant_events(user, query_embedding)
         upcoming_events = get_combined_event_data_for_assistant(
             request.user
         )
-        # Generate a response using OpenAI's chat completion API
+        #Retrieve last 5 ChatMessages for history
+        history = ChatMessage.objects.filter(user=user).order_by('-created_at')[:5][::-1]
+        history_prompt = "\n".join([f"User: {m.message}\nAI: {m.response}" for m in history])
+
+        prompt = f"{history_prompt}\n\nContext:\n{relevant_context}\n\nUser: {message}\nAI:"
+
+    # Generate a response using OpenAI's chat completion API
         completion = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "assistant", "content":
-                    f"You are a helpful assistant. When responding take into account my schedule"
-                 },
-                {"role": "user", "content": message},
-                {"role": "user", "content": f"Here is my schedule: {upcoming_events}"},
+                {"role": "assistant", "content": "You are a helpful assistant. use my schedule to answer my questions."},
+                {"role": "user", "content": prompt},
+                {"role": "user", "content": f"Here is my schedule: {relevant_context}"},
+
             ],
             top_p=0.7,
         )
@@ -70,8 +130,10 @@ def response(request):
 
         # Save the message and response to the database
         ChatMessage.objects.create(message=message, response=answer, user=request.user)
+        # Generate TTS audio
+        audio_url = synthesize_speech(answer)
 
-        return JsonResponse({'response': answer}, status=200)
+        return JsonResponse({'response': answer, 'audio_url': audio_url}, status=200)
 
     # Return an error response for non-POST requests
     return JsonResponse({'response': 'Invalid Request'}, status=400)
@@ -257,10 +319,12 @@ def list_events(request):
                     event_start = event_start.astimezone(pytz.utc)
             except ValueError:
                 continue  # skip if invalid format
+            embedding = embed_text(json.dumps(event))
             event_instances.append(CalendarEvent(
                 user=request.user,
                 event_data=event,
                 event_start=event_start,
+                embedding=embedding,
                 summary=summary
             ))
     if event_instances and len(event_instances) > 0:
