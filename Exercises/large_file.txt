@@ -1,0 +1,10 @@
+Line 1: Welcome to file streaming.
+Line 2: Python is great for working with files.
+Line 3: You can iterate line by line.
+Line 4: Even large files are handled efficiently.
+Line 5: Keep reading!
+Line 6: Nearly done.
+Line 7: Almost there.
+Line 8: Just two more lines.
+Line 9: Second to last line.
+Line 10: Final line. Congratulations!

@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timedelta
 
+import numpy as np
 import pytz
 from django.shortcuts import redirect, render
 from django.http import JsonResponse, HttpResponse
@@ -38,6 +39,8 @@ def response(request):
     Returns:
         JsonResponse: A JSON response containing the AI-generated message or an error message.
     """
+    """
+    original
     if request.method == 'POST':
         # Retrieve the user's message from the POST request
         message = request.POST.get("message", "")
@@ -46,6 +49,27 @@ def response(request):
         upcoming_events = get_combined_event_data_for_assistant(
             request.user
         )
+    """
+
+    if request.method == 'POST':
+        # Retrieve the user's message from the POST request
+        message = request.POST.get("message", "")
+        if not message:
+            return JsonResponse({'response': 'No message provided.'}, status=400)
+
+        query_embedding = embed_text(message)
+        user = request.user
+        # Retrieve past events with embeddings
+        relevant_context = get_relevant_events(user, query_embedding)
+        upcoming_events = get_combined_event_data_for_assistant(
+        request.user
+        )
+        #Retrieve last 5 ChatMessages for history
+        history = ChatMessage.objects.filter(user=user).order_by('-created_at')[:5][::-1]
+        history_prompt = "\n".join([f"User: {m.message}\nAI: {m.response}" for m in history])
+
+        prompt = f"{history_prompt}\n\nContext:\n{relevant_context}\n\nUser: {message}\nAI:"
+
         # Generate a response using OpenAI's chat completion API
         completion = client.chat.completions.create(
             model="gpt-3.5-turbo",
@@ -160,6 +184,8 @@ def list_events(request):
     Returns:
         HttpResponse: Renders the events page with the list of events.
     """
+
+
     # Retrieve the stored Google token from the session
     token_info = request.session.get('google_token')
     if not token_info:
@@ -206,7 +232,7 @@ def list_events(request):
     event_instances = []
     for event in events:
         start_str = event.get('start', {}).get('dateTime') or event.get('start', {}).get('date')
-        summary = event.get("summary")
+        summary = event.get("summary")  # <-- FIXED HERE
         if start_str:
             try:
                 event_start = datetime.fromisoformat(start_str)
@@ -214,14 +240,19 @@ def list_events(request):
                     event_start = pytz.utc.localize(event_start)
                 else:
                     event_start = event_start.astimezone(pytz.utc)
-            except ValueError:
-                continue  # skip if invalid format
+            except ValueError as ex:
+                print(ex)
+                continue  # skip invalid dates
+            embedding = embed_text(json.dumps(event))
             event_instances.append(CalendarEvent(
                 user=request.user,
                 event_data=event,
                 event_start=event_start,
+                embedding=embedding,
                 summary=summary
             ))
+
+
     if event_instances and len(event_instances) > 0:
         CalendarEvent.objects.bulk_create(event_instances)
 
@@ -271,3 +302,39 @@ def credentials_to_dict(credentials):
         'client_secret': credentials.client_secret,
         'scopes': list(credentials.scopes),
     }
+from sklearn.metrics.pairwise import cosine_similarity
+# Initialize OpenAI client
+# This client is used to interact with the OpenAI API for generating chat responses.
+client = OpenAI(api_key=settings.OPEN_AI_API_KEY, organization=settings.OPENAI_ORG_ID)
+
+
+
+def compute_cosine_similarities(query_vector, matrix):
+    if not matrix:
+        return []
+    query_vec = np.array(query_vector).reshape(1, -1)
+    matrix_np = np.array(matrix)
+    similarities = cosine_similarity(query_vec, matrix_np)[0]
+    return similarities
+
+def embed_text(text):
+    result = client.embeddings.create(
+        input=[text],
+        model="text-embedding-ada-002"
+    )
+    return result.data[0].embedding
+
+def get_relevant_events(user, query_embedding):
+    # Step 2: Retrieve past events with embeddings
+    # This function retrieves past events for the user and computes their cosine similarity with the query embedding.
+    relevant_context = "No events found."
+    events = CalendarEvent.objects.filter(user=user, embedding__isnull=False)
+    if events:
+        embeddings = [event.embedding for event in events]
+        similarities = compute_cosine_similarities(query_embedding, embeddings)
+        top_indices = np.argsort(similarities)[-3:][::-1]
+        events_list = list(events)
+        top_events = [events_list[i] for i in top_indices]
+        relevant_context = "\n".join([json.dumps(event.event_data) for event in top_events])
+        return relevant_context
+    return relevant_context
